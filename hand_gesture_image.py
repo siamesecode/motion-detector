@@ -37,6 +37,8 @@ class HandGestureImageDisplay:
         self.both_hands_up = False
         self.current_image_index = 0
         self.current_gesture = None
+        self.gesture_frames = 0
+        self.gesture_threshold = 2
         
         self.gesture_to_image = {}
         for i, name in enumerate(self.image_names):
@@ -49,6 +51,8 @@ class HandGestureImageDisplay:
                 self.gesture_to_image['pointing_left'] = i
             elif 'fazol' in name_lower or 'faz' in name_lower:
                 self.gesture_to_image['L_right'] = i
+            elif 'gato' in name_lower:
+                self.gesture_to_image['hang_loose_left'] = i
         
     def resize_image(self, img, max_size=500):
         height, width = img.shape[:2]
@@ -109,6 +113,21 @@ class HandGestureImageDisplay:
         
         return index_extended and thumb_extended and (middle_closed or ring_closed)
     
+    def is_hang_loose(self, hand_landmarks):
+        thumb_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP]
+        pinky_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.PINKY_TIP]
+        index_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
+        middle_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+        ring_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.RING_FINGER_TIP]
+        wrist = hand_landmarks.landmark[self.mp_hands.HandLandmark.WRIST]
+        
+        thumb_extended = thumb_tip.y < wrist.y - 0.1
+        pinky_extended = abs(pinky_tip.x - wrist.x) > 0.1
+        
+        middle_fingers_down = (middle_tip.y > wrist.y - 0.05) or (index_tip.y > wrist.y - 0.05) or (ring_tip.y > wrist.y - 0.05)
+        
+        return thumb_extended and pinky_extended and middle_fingers_down
+    
     def process_frame(self, frame):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = self.hands.process(rgb_frame)
@@ -126,11 +145,15 @@ class HandGestureImageDisplay:
                 hand_label = handedness.classification[0].label
                 is_pointing = self.is_pointing_up(hand_landmarks)
                 is_L = self.is_L_shape(hand_landmarks)
+                is_hang = self.is_hang_loose(hand_landmarks)
                 
-                debug_info.append(f"{hand_label}: Point={is_pointing} L={is_L}")
+                debug_info.append(f"{hand_label}: Point={is_pointing} L={is_L} Hang={is_hang}")
                 
                 if hand_label == 'Left' and is_pointing:
                     gesture_type = 'pointing_left'
+                    break
+                elif hand_label == 'Left' and is_hang:
+                    gesture_type = 'hang_loose_left'
                     break
                 elif hand_label == 'Right' and is_L:
                     gesture_type = 'L_right'
@@ -169,6 +192,7 @@ class HandGestureImageDisplay:
         print("👐 DUAS MAOS RETAS → Calabreso")
         print("👐 DUAS MAOS INCLINADAS → Avril")
         print("☝️  MAO ESQUERDA APONTANDO → Macaco")
+        print("🤙 MAO ESQUERDA HANG LOOSE → Gato")
         print("🤙 MAO DIREITA L → Faz o L")
         print("\nPressione 'q' para sair")
         print("=" * 60)
@@ -182,10 +206,17 @@ class HandGestureImageDisplay:
             processed_frame, hands_count, gesture_type, debug_info = self.process_frame(frame)
             
             if gesture_type and gesture_type in self.gesture_to_image:
-                self.current_image_index = self.gesture_to_image[gesture_type]
-                self.current_gesture = gesture_type
-                self.both_hands_up = True
+                if gesture_type == self.current_gesture:
+                    self.gesture_frames += 1
+                else:
+                    self.gesture_frames = 1
+                    self.current_gesture = gesture_type
+                
+                if self.gesture_frames >= self.gesture_threshold:
+                    self.current_image_index = self.gesture_to_image[gesture_type]
+                    self.both_hands_up = True
             else:
+                self.gesture_frames = 0
                 self.both_hands_up = False
             
             cv2.putText(processed_frame, f"Maos: {hands_count}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -199,6 +230,7 @@ class HandGestureImageDisplay:
                     'vertical': "DUAS MAOS RETAS",
                     'inclined': "DUAS MAOS INCLINADAS", 
                     'pointing_left': "APONTANDO",
+                    'hang_loose_left': "HANG LOOSE",
                     'L_right': "FAZENDO L"
                 }
                 gesture_name = gesture_names.get(gesture_type, gesture_type)
